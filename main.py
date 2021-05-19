@@ -1,162 +1,155 @@
-import subprocess as sp
+import argparse
 import json
-import functools
+import subprocess as sp
+from datetime import datetime
+from functools import reduce
+from itertools import chain
+from typing import Counter, FrozenSet, Iterator, List, Mapping, Tuple
 
 import gitparser
 import ir
-from typing import NamedTuple, Dict
-from collections import defaultdict
-from datetime import datetime
+
+ENCODING = "UTF-8"
+
+Tag = Mapping[str, str]
+CanonTag = FrozenSet[Tuple[str, str]]
 
 
-class Tag(NamedTuple):
-    path: str
-    name: str
-    kind: str
-    scope: str
-    scope_kind: str
+def has_lineno(tag: Tag, lineno: int) -> bool:
+    line = tag.get("line")
+    end = tag.get("end")
+    if line is None:
+        raise RuntimeError("Tag produced by ctags is missing `line` property.")
+    # Sometimes `end` is missing. This seems like a bug with universal-ctags.
+    # It seems this only happens for the last tag in the file.
+    return lineno >= int(line) and (end is None or lineno <= int(end))
 
-    def __str__(self):
-        return "{} > {} ({})".format(self.path, self.name, self.kind)
+
+def count_linenos(tag: Tag, linenos: Iterator[int]) -> int:
+    return sum(1 for i in linenos if has_lineno(tag, i))
 
 
-class RawCTag:
-    def __init__(self, json_text: str):
-        self.json = json_text
-        obj = json.loads(json_text)
-        self.name = obj["name"]
-        self.path = obj["path"]
-        self.line = obj["line"]
-        self.end = obj.get("end")
-        self.kind = obj["kind"]
-        self.scope = obj.get("scope")
-        self.scope_kind = obj.get("scopeKind")
+def to_canon(tag: Tag) -> CanonTag:
+    return frozenset((k, v) for k, v in tag.items() if k not in ["line", "end"])
 
-    def has_lineno(self, lineno: int):
-        return lineno >= self.line and (self.end is None or lineno <= self.end)
 
-    def tag(self):
-        return Tag(self.path, self.name, self.kind, self.scope, self.scope_kind)
+def to_json(tag: CanonTag) -> str:
+    return json.dumps({k: v for k, v in tag})
 
-    def __str__(self):
-        return "{}[{}:{}] > {} ({})".format(
-            self.path, self.line, self.end, self.name, self.kind
+
+def to_display_name(tag: CanonTag) -> str:
+    d = {k: v for k, v in tag}
+    return "{} > {} ({})".format(d["path"], d["name"], d["kind"])
+
+
+def run(args: List[str]) -> str:
+    return sp.run(args, encoding=ENCODING, capture_output=True, check=True).stdout
+
+
+class GitDriver:
+    def __init__(self, **kwargs: str) -> None:
+        git_bin = kwargs.get("git_bin", "git")
+        git_repo = kwargs.get("git_repo", ".")
+        self._init_args = [git_bin, "-C", git_repo]
+
+    def show(self, filename: str, hash: str) -> str:
+        args = self._init_args + ["show", "{}:{}".format(hash, filename)]
+        return run(args)
+
+    def files(self, ref: str) -> List[str]:
+        args = self._init_args + ["ls-tree", "-r", "--name-only", ref]
+        return run(args).splitlines()
+
+    def log(self) -> Iterator[str]:
+        args = self._init_args + ["log"] + gitparser.GIT_LOG_ARGS
+        proc = sp.Popen(args, encoding=ENCODING, stdout=sp.PIPE)
+        assert proc.stdout is not None
+        return proc.stdout
+
+
+class CTagsDriver:
+    def __init__(self, **kwargs: str) -> None:
+        self._init_args = [kwargs.get("ctags_bin", "ctags")]
+
+    def generate_tags(self, filename: str, text: str) -> List[Tag]:
+        args = self._init_args + ["--_interactive", "--fields=*"]
+        proc = sp.Popen(args, encoding=ENCODING, stdout=sp.PIPE, stdin=sp.PIPE)
+        cin = '{{"command":"generate-tags", "filename":"{}", "size":{}}}\n{}'.format(
+            filename, len(text.encode(ENCODING)), text
         )
+        lines = proc.communicate(cin)[0].splitlines()[1:-1]
+        return [json.loads(line) for line in lines]
 
 
-def git_show(repo: str, hash: str, filename: str):
-    result = sp.run(
-        ["git", "-C", repo, "show", "{}:{}".format(hash, filename)],
-        encoding="UTF-8",
-        capture_output=True,
-        check=True,
-    )
-    return result.stdout
+class TagProvider:
+    def __init__(self, git: GitDriver, ctags: CTagsDriver):
+        self._git = git
+        self._ctags = ctags
+
+    def get_tags(self, filename: str, hash: str) -> List[Tag]:
+        return self._ctags.generate_tags(filename, self._git.show(filename, hash))
+
+    def get_parent_tags(self, filename: str, hash: str) -> List[Tag]:
+        return self.get_tags(filename, "{}^".format(hash))
 
 
-def git_files(repo: str, ref: str):
-    args = ["git", "-C", repo, "ls-tree", "-r", "--name-only", ref]
-    result = sp.run(args, encoding="UTF-8", capture_output=True, check=True)
-    return result.stdout.splitlines()
+class ChurnProvider:
+    def __init__(self, tag_provider: TagProvider):
+        self._tag_provider = tag_provider
 
+    def get_churn(self, commit: ir.Commit) -> Counter[CanonTag]:
+        adds = (self.get_adds(commit.hash, c) for c in commit.changes)
+        dels = (self.get_dels(commit.hash, c) for c in commit.changes)
+        return reduce(lambda a, b: a + b, chain(adds, dels), Counter())
 
-# def git_show_parent(repo: str, hash: str, filename: str):
-#     return git_show(repo, "{}^".format(hash), filename)
+    def get_adds(self, hash: str, change: ir.Change) -> Counter[CanonTag]:
+        count: Counter[CanonTag] = Counter()
+        if not change.has_newlines():
+            return count
+        for tag in self._tag_provider.get_tags(change.filename, hash):
+            count[to_canon(tag)] = count_linenos(tag, change.newlines())
+        return count
 
-
-def get_ctags_for_text(filename: str, text: str):
-    # ctags --_interactive --fields=*
-    proc = sp.Popen(
-#        ["ctags", "--_interactive", "--fields=NFenspk", "--extras=f"],
-        ["ctags", "--_interactive", "--fields=*", "--extras=f"],
-        encoding="UTF-8",
-        stdout=sp.PIPE,
-        stdin=sp.PIPE,
-    )
-    stdin = '{{"command":"generate-tags", "filename":"{}", "size": {}}}\n{}'.format(
-        filename, len(text.encode("UTF-8")), text
-    )
-    lines = proc.communicate(stdin)[0].splitlines()[1:-1]
-    return [RawCTag(l) for l in lines]
-
-
-@functools.lru_cache(maxsize=None)
-def get_ctags(repo: str, filename: str, hash: str):
-    ctags = get_ctags_for_text(filename, git_show(repo, hash, filename))
-    return ctags
-
-
-@functools.lru_cache(maxsize=None)
-def git_canonical(repo: str, filename: str, hash: str):
-    args = ["git", "-C", repo, "rev-list", "-1", hash, "--", filename]
-    result = sp.run(args, encoding="UTF-8", capture_output=True, check=True)
-    return result.stdout.strip()
-
-
-def get_parent_ctags(repo: str, filename: str, hash: str):
-    canonical_hash = git_canonical(repo, filename, "{}^".format(hash))
-    return get_ctags(repo, filename, canonical_hash)
+    def get_dels(self, hash: str, change: ir.Change) -> Counter[CanonTag]:
+        count: Counter[CanonTag] = Counter()
+        if not change.has_dellines():
+            return count
+        for tag in self._tag_provider.get_parent_tags(change.filename, hash):
+            count[to_canon(tag)] = count_linenos(tag, change.dellines())
+        return count
 
 
 if __name__ == "__main__":
-    start = datetime.now()
-
-    files = git_files("repo", "HEAD")
-    files = (f for f in files if f.endswith(".java"))
-    files = set(f for f in files if "/src/test/" not in f)
-    churn: Dict[Tag, int] = defaultdict(int)
-
-    proc = sp.Popen(
-        ["git", "-C", "repo", "log", "-n", "500"] + gitparser.GIT_LOG_ARGS,
-        encoding="UTF-8",
-        stdout=sp.PIPE,
+    parser = argparse.ArgumentParser(
+        description="calculate change churn below the file-level"
+    )
+    parser.add_argument(
+        "--git-repo",
+        dest="git_repo",
+        default=".",
+        help="path to the git repository (default: current directory)",
+    )
+    parser.add_argument(
+        "--git-path",
+        dest="git_bin",
+        default="git",
+        help="path to git binary (default: git)",
+    )
+    parser.add_argument(
+        "--ctags-path",
+        dest="ctags_bin",
+        default="ctags",
+        help="path to the universal-ctags binary (default: ctags)",
     )
 
-    kinds = set()
+    args = parser.parse_args()
+    git_driver = GitDriver(git_bin=args.git_bin, git_repo=args.git_repo)
+    ctags_driver = CTagsDriver(ctags_bin=args.ctags_bin)
+    tag_provider = TagProvider(git_driver, ctags_driver)
+    churn_provider = ChurnProvider(tag_provider)
 
-    for commit in gitparser.parse(proc.stdout):
-        for change in commit.changes:
-            if change.filename not in files:
-                continue
-            has_news = any(c.new_offset > 0 for c in change.chunks)
-            has_dels = any(c.del_offset > 0 for c in change.chunks)
-            if has_news:
-                new_ctags = get_ctags("repo", change.filename, commit.hash)
-            if has_dels:
-                del_ctags = get_parent_ctags("repo", change.filename, commit.hash)
-            adds: Dict[Tag, int] = defaultdict(int)
-            dels: Dict[Tag, int] = defaultdict(int)
-
-            # hack
-            json_strs: Dict[Tag, str] = dict()
-
-            for chunk in change.chunks:
-                for i in range(chunk.del_lineno, chunk.del_lineno + chunk.del_offset):
-                    for ctag in del_ctags:
-                        if ctag.has_lineno(i):
-                            tag = ctag.tag()
-                            json_strs[tag] = ctag.json
-                            dels[tag] += 1
-                            churn[tag] += 1
-                for i in range(chunk.new_lineno, chunk.new_lineno + chunk.new_offset):
-                    for ctag in new_ctags:
-                        if ctag.has_lineno(i):
-                            tag = ctag.tag()
-                            json_strs[tag] = ctag.json
-                            adds[tag] += 1
-                            churn[tag] += 1
-
-            for tag in adds.keys() | dels.keys():
-                print("{}\t{}\t{}\t{}".format(commit.hash, adds[tag], dels[tag], json_strs[tag]))
-                kinds.add(tag.kind)
-
-    for kind in sorted(kinds):
-        print(kind)
-    # print(len(churn))
-
-    
-
-    # for tag in sorted(churn, key=lambda x: x.path):
-    #     print("{}: {}".format(tag, churn[tag]))
-
+    start = datetime.now()
+    for commit in gitparser.parse(git_driver.log()):
+        for tag, churn in churn_provider.get_churn(commit).items():
+            print("{}\t{}\t{}".format(commit.hash, churn, to_display_name(tag)))
     print(datetime.now() - start)
