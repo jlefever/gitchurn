@@ -1,112 +1,148 @@
-import datetime
 import re
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 import ir
 
-RE_CHUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
-
 STR_COMMIT = "commit "
 STR_DIFF = "diff --git"
+STR_NEW_FILE = "new file mode"
+STR_DEL_FILE = "deleted file mode"
 STR_FROM = "--- a/"
 STR_TO = "+++ b/"
 STR_CHUNK = "@@ -"
+
+RE_CHUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 GIT_LOG_ARGS = [
     # Format commits so the output log can be parsed.
     "--pretty=short",
     "--no-decorate",
     # Order commits so a parent always appears before its children.
+    # This is actually not necessary. Consider removing.
     "--topo-order",
     "--reverse",
     # Disable rename and move detection.
     "--no-renames",
     "--no-color-moved",
-    # Each commit includes the hashs of its parent(s). This enables
+    # Have each commit includes the hashes of its parent(s). This enables
     # parent rewriting by default.
     "--parents",
-    # Disable parent rewriting.
+    # So we disable parent rewriting.
     "--full-history",
-    # Display patch information with each commit.
-    "-U0",
+    # Display patch information with each commit and show only changed lines.
+    "--unified=0",
+    # Use the histogram algorithm for diffs. This is best for source code.
+    # https://link.springer.com/article/10.1007/s10664-019-09772-z
     "--histogram",
     # Only show Added (A), Deleted (D), and Modified (M) files.
     "--diff-filter=ADM",
-    "--no-merges"
+    # Hide merge commits.
+    "--no-merges",
 ]
 
 
-def _iso_date(text: str):
-    return datetime.datetime.strptime(text, r"%Y-%m-%d %H:%M:%S %z")
-
-
-class _ParserState:
-    def __init__(self):
+class ChangeBuilder:
+    def __init__(self) -> None:
         self.reset()
 
-    def reset(self):
-        self.hash: Optional[str] = None
-        self.parents: List[str] = list()
-        self.changes: List[ir.Change] = list()
-        self.filename: Optional[str] = None
-        self.change_kind: ir.ChangeKind = ir.ChangeKind.MODIFIED
-        self.chunks: List[ir.Chunk] = list()
+    def reset(self) -> None:
+        self._filename: Optional[str] = None
+        self._kind: ir.ChangeKind = ir.ChangeKind.MODIFIED
+        self._chunks: List[ir.Chunk] = []
+
+    def set_filename(self, filename: str) -> None:
+        self._filename = filename
+
+    def set_kind(self, kind: ir.ChangeKind) -> None:
+        self._kind = kind
+
+    def add_chunk(self, chunk: ir.Chunk) -> None:
+        self._chunks.append(chunk)
+
+    def is_valid(self) -> bool:
+        return self._filename is not None
+
+    def finalize(self) -> ir.Change:
+        if self._filename is None:
+            raise RuntimeError("Cannot finalize change without a filename.")
+        change = ir.Change(self._filename, self._kind, self._chunks)
+        self.reset()
+        return change
 
 
-def parse(lines):
-    state = _ParserState()
+class CommitBuilder:
+    def __init__(self) -> None:
+        self.reset()
 
-    def push_change(state: _ParserState):
-        if state.filename is not None:
-            change = ir.Change(state.filename, state.change_kind, state.chunks)
-            state.changes.append(change)
-        state.filename = None
-        state.change_kind = ir.ChangeKind.MODIFIED
-        state.chunks = list()
+    def reset(self) -> None:
+        self._hash: Optional[str] = None
+        self._parents: List[str] = []
+        self._changes: List[ir.Change] = []
 
-    def push_commit(state: _ParserState):
-        commit = ir.Commit(state.hash, state.parents, state.changes)
-        state.reset()
+    def set_hash(self, hash: str) -> None:
+        self._hash = hash
+
+    def set_parents(self, parents: List[str]) -> None:
+        self._parents = parents
+
+    def add_change(self, change: ir.Change) -> None:
+        self._changes.append(change)
+
+    def is_valid(self) -> bool:
+        return self._hash is not None
+
+    def finalize(self) -> ir.Commit:
+        if self._hash is None:
+            raise RuntimeError("Cannot finalize commit without a hash.")
+        commit = ir.Commit(self._hash, self._parents, self._changes)
+        self.reset()
         return commit
 
-    for line in lines:
-        line = line.rstrip()
-        if line.startswith(STR_COMMIT):
-            if state.hash is not None:
-                push_change(state)
-                yield push_commit(state)
-            hashs = line[len(STR_COMMIT) :].split(" ")
-            state.hash = hashs[0]
-            state.parents = hashs[1:]
-        elif line.startswith(STR_DIFF):
-            push_change(state)
-        elif line.startswith(STR_FROM):
-            text = line[len(STR_FROM) :].strip()
-            state.change_kind = ir.ChangeKind.DELETED
-            state.filename = text
-        elif line.startswith(STR_TO):
-            if state.filename is None:
-                state.change_kind = ir.ChangeKind.ADDED
-            else:
-                state.change_kind = ir.ChangeKind.MODIFIED
-            text = line[len(STR_TO) :].strip()
-            assert (state.filename is None) or (state.filename == text)
-            state.filename = text
-        elif line.startswith(STR_CHUNK):
-            match = RE_CHUNK.match(line)
-            assert match is not None
-            a, b, c, d = match.groups()
-            del_lineno = int(a)
-            del_offset = int(b) if b else 1
-            new_lineno = int(c)
-            new_offset = int(d) if d else 1
-            chunk = ir.Chunk(new_lineno, new_offset, del_lineno, del_offset)
-            state.chunks.append(chunk)
-    if state.hash is not None:
-        push_change(state)
-        yield push_commit(state)
 
-    # filename = "gitlog.txt"
-    # with codecs.open(filename, "r", encoding="iso-8859-1") as file:
-    #     print(next(parse(file)))
-    #     print(next(parse(file)))
+def parse_chunk(text: str) -> ir.Chunk:
+    match = RE_CHUNK.match(text)
+    if match is None:
+        raise RuntimeError("Invalid chunk header: {}".format(text))
+    a, b, c, d = match.groups()
+    del_offset = int(b) if b else 1
+    new_offset = int(d) if d else 1
+    return ir.Chunk(int(c), new_offset, int(a), del_offset)
+
+
+def parse(lines: Iterator[str]) -> Iterator[ir.Commit]:
+    # These builders hold our intermediate state.
+    commit_builder = CommitBuilder()
+    change_builder = ChangeBuilder()
+
+    # Iterate line by line through the log.
+    for line in (l.rstrip() for l in lines):
+        if line.startswith(STR_COMMIT):
+            # Yield the previous commit before starting a new one.
+            if change_builder.is_valid():
+                commit_builder.add_change(change_builder.finalize())
+            if commit_builder.is_valid():
+                yield commit_builder.finalize()
+            # Set the hash and parent hashes.
+            hashes = line[len(STR_COMMIT) :].split(" ")
+            commit_builder.set_hash(hashes[0])
+            commit_builder.set_parents(hashes[1:])
+        # Finalize the current change before starting a new one.
+        elif line.startswith(STR_DIFF) and change_builder.is_valid():
+            commit_builder.add_change(change_builder.finalize())
+        # Below here we just update our intermediate state.
+        elif line.startswith(STR_FROM):
+            change_builder.set_filename(line[len(STR_FROM) :])
+        elif line.startswith(STR_TO):
+            change_builder.set_filename(line[len(STR_TO) :])
+        elif line.startswith(STR_NEW_FILE):
+            change_builder.set_kind(ir.ChangeKind.ADDED)
+        elif line.startswith(STR_DEL_FILE):
+            change_builder.set_kind(ir.ChangeKind.DELETED)
+        elif line.startswith(STR_CHUNK):
+            change_builder.add_chunk(parse_chunk(line))
+
+    # Yield the last commit. (Except when the log file is empty.)
+    if change_builder.is_valid():
+        commit_builder.add_change(change_builder.finalize())
+    if commit_builder.is_valid():
+        yield commit_builder.finalize()
