@@ -33,7 +33,7 @@ def count_linenos(tag: Tag, linenos: Iterator[int]) -> int:
 
 
 def to_canon(tag: Tag) -> CanonTag:
-    return frozenset((k, v) for k, v in tag.items() if k not in ["line", "end"])
+    return frozenset((k, v) for k, v in tag.items() if k not in ["line", "end", "_type"])
 
 
 def run(args: List[str]) -> str:
@@ -67,7 +67,8 @@ class CTagsDriver:
         self._init_args = [kwargs.get("ctags_bin", "ctags")]
 
     def generate_tags(self, filename: str, text: str) -> List[Tag]:
-        args = self._init_args + ["--_interactive", "--fields=*"]
+        # TODO: Allow customizing these arguments from the command line
+        args = self._init_args + ["--_interactive", "--fields=FzZNpen", "--extras=+f"]
         proc = sp.Popen(args, encoding=ENCODING, stdout=sp.PIPE, stdin=sp.PIPE)
         cin = '{{"command":"generate-tags", "filename":"{}", "size":{}}}\n{}'.format(
             filename, len(text.encode(ENCODING)), text
@@ -129,7 +130,7 @@ class HumanFormatter(TagFormatter):
 
 class JsonFormatter(TagFormatter):
     def format(self, tag: CanonTag) -> str:
-        return json.dumps({k: v for k, v in tag})
+        return json.dumps({k: v for k, v in tag}, sort_keys=True)
 
 
 class TagFormatterFactory:
