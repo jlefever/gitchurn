@@ -46,5 +46,4 @@ class Change(NamedTuple):
 
 class Commit(NamedTuple):
     hash: str
-    parents: List[str]
     changes: List[Change]

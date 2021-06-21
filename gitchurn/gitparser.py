@@ -21,18 +21,9 @@ GIT_LOG_ARGS = [
     # Format commits so the output log can be parsed.
     "--pretty=short",
     "--no-decorate",
-    # Order commits so a parent always appears before its children.
-    # This is actually not necessary. Consider removing.
-    "--topo-order",
-    "--reverse",
     # Disable rename and move detection.
     "--no-renames",
     "--no-color-moved",
-    # Have each commit includes the hashes of its parent(s). This enables
-    # parent rewriting by default.
-    "--parents",
-    # So we disable parent rewriting.
-    "--full-history",
     # Display patch information with each commit and show only changed lines.
     "--unified=0",
     # Use the histogram algorithm for diffs. This is best for source code.
@@ -41,7 +32,7 @@ GIT_LOG_ARGS = [
     # Only show Added (A), Deleted (D), and Modified (M) files.
     "--diff-filter=ADM",
     # Hide merge commits.
-    "--no-merges",
+    "--no-merges"
 ]
 
 
@@ -80,14 +71,10 @@ class CommitBuilder:
 
     def reset(self) -> None:
         self._hash: Optional[str] = None
-        self._parents: List[str] = []
         self._changes: List[ir.Change] = []
 
     def set_hash(self, hash: str) -> None:
         self._hash = hash
-
-    def set_parents(self, parents: List[str]) -> None:
-        self._parents = parents
 
     def add_change(self, change: ir.Change) -> None:
         self._changes.append(change)
@@ -98,7 +85,7 @@ class CommitBuilder:
     def finalize(self) -> ir.Commit:
         if self._hash is None:
             raise RuntimeError("Cannot finalize commit without a hash.")
-        commit = ir.Commit(self._hash, self._parents, self._changes)
+        commit = ir.Commit(self._hash, self._changes)
         self.reset()
         return commit
 
@@ -126,10 +113,8 @@ def parse(lines: Iterator[str]) -> Iterator[ir.Commit]:
                 commit_builder.add_change(change_builder.finalize())
             if commit_builder.is_valid():
                 yield commit_builder.finalize()
-            # Set the hash and parent hashes.
-            hashes = line[len(STR_COMMIT) :].split(" ")
-            commit_builder.set_hash(hashes[0])
-            commit_builder.set_parents(hashes[1:])
+            # Set the hash.
+            commit_builder.set_hash(line[len(STR_COMMIT) :])
         # Finalize the current change before starting a new one.
         elif line.startswith(STR_DIFF) and change_builder.is_valid():
             commit_builder.add_change(change_builder.finalize())
