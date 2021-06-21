@@ -34,9 +34,17 @@ def main(argv: Optional[List[str]] = None):
         default="ctags",
         help="path to the universal-ctags binary (default: ctags)",
     )
+    parser.add_argument(
+        "--git-log-args",
+        dest="git_log_args",
+        default="",
+        help="any additional arguments to pass to git-log (optional)",
+    )
 
     args = parser.parse_args(argv)
-    git_driver = gitchurn.GitDriver(git_bin=args.git_bin, git_repo=args.git_repo)
+    git_driver = gitchurn.GitDriver(
+        git_bin=args.git_bin, git_repo=args.git_repo, git_log_args=args.git_log_args
+    )
     ctags_driver = gitchurn.CTagsDriver(ctags_bin=args.ctags_bin)
     tag_provider = gitchurn.TagProvider(git_driver, ctags_driver)
     churn_provider = gitchurn.ChurnProvider(tag_provider)

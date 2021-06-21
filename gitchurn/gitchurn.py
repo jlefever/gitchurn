@@ -3,6 +3,7 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import json
+import shlex
 import subprocess as sp
 from functools import reduce
 from itertools import chain
@@ -52,6 +53,7 @@ class GitDriver:
         git_bin = kwargs.get("git_bin", "git")
         git_repo = kwargs.get("git_repo", ".")
         self._init_args = [git_bin, "-C", git_repo]
+        self._log_args = shlex.split(kwargs.get("git_log_args", ""))
 
     def show(self, filename: str, hash: str) -> str:
         args = self._init_args + ["show", "{}:{}".format(hash, filename)]
@@ -62,7 +64,7 @@ class GitDriver:
         return run(args).splitlines()
 
     def log(self) -> Iterator[str]:
-        args = self._init_args + ["log"] + gitparser.GIT_LOG_ARGS
+        args = self._init_args + ["log"] + gitparser.GIT_LOG_ARGS + self._log_args
         proc = sp.Popen(args, encoding=ENCODING, stdout=sp.PIPE)
         assert proc.stdout is not None
         return proc.stdout
