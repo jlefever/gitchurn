@@ -13,8 +13,9 @@ from gitchurn import gitchurn, gitparser
 def main(argv: Optional[List[str]] = None):
     if argv is None:
         argv = sys.argv[1:]
+
     parser = argparse.ArgumentParser(
-        description="calculate change churn below the file-level"
+        prog="gitchurn", description="calculate change churn below the file-level"
     )
     parser.add_argument(
         "--git-repo",
@@ -45,6 +46,16 @@ def main(argv: Optional[List[str]] = None):
         help="exclude commits that changed more than this number of files (optional)",
     )
 
+    formatter_factory = gitchurn.TagFormatterFactory()
+
+    parser.add_argument(
+        "--tag-format",
+        choices=formatter_factory.kinds(),
+        default="human",
+        dest="tag_format",
+        help="how to display the tags (default: human)",
+    )
+
     args = parser.parse_args(argv)
     git_driver = gitchurn.GitDriver(
         git_bin=args.git_bin, git_repo=args.git_repo, git_log_args=args.git_log_args
@@ -55,7 +66,7 @@ def main(argv: Optional[List[str]] = None):
     printer = gitchurn.ChurnPrinter(churn_provider, git_driver)
 
     start = datetime.now()
-    printer.print(int(args.max_changes))
+    printer.print(formatter_factory.create(args.tag_format), int(args.max_changes))
     print(datetime.now() - start)
     return 0
 

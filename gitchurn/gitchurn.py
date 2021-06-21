@@ -2,6 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import abc
 import json
 import shlex
 import subprocess as sp
@@ -33,15 +34,6 @@ def count_linenos(tag: Tag, linenos: Iterator[int]) -> int:
 
 def to_canon(tag: Tag) -> CanonTag:
     return frozenset((k, v) for k, v in tag.items() if k not in ["line", "end"])
-
-
-def to_json(tag: CanonTag) -> str:
-    return json.dumps({k: v for k, v in tag})
-
-
-def to_display_name(tag: CanonTag) -> str:
-    d = {k: v for k, v in tag}
-    return "{} > {} ({})".format(d["path"], d["name"], d["kind"])
 
 
 def run(args: List[str]) -> str:
@@ -123,15 +115,47 @@ class ChurnProvider:
         return count
 
 
+class TagFormatter(abc.ABC):
+    @abc.abstractmethod
+    def format(self, tag: CanonTag) -> str:
+        pass
+
+
+class HumanFormatter(TagFormatter):
+    def format(self, tag: CanonTag) -> str:
+        d = {k: v for k, v in tag}
+        return "{} > {} ({})".format(d["path"], d["name"], d["kind"])
+
+
+class JsonFormatter(TagFormatter):
+    def format(self, tag: CanonTag) -> str:
+        return json.dumps({k: v for k, v in tag})
+
+
+class TagFormatterFactory:
+    def __init__(self):
+        self._kinds = ["human", "json"]
+
+    def kinds(self) -> List[str]:
+        return self._kinds
+
+    def create(self, kind: str) -> TagFormatter:
+        if kind not in self.kinds():
+            raise ValueError("Invalid `kind`.")
+        if kind == "human":
+            return HumanFormatter()
+        return JsonFormatter()
+
+
 class ChurnPrinter:
     def __init__(self, churn_provider: ChurnProvider, git_driver: GitDriver):
         self._churn = churn_provider
         self._git = git_driver
 
-    def print(self, max_changes: Optional[int] = None):
+    def print(self, formatter: TagFormatter, max_changes: Optional[int] = None) -> None:
         for commit in gitparser.parse(self._git.log()):
             # Exclude commits that changed too many files
             if (max_changes is not None) and (len(commit.changes) > max_changes):
                 continue
             for tag, churn in self._churn.get_churn(commit).items():
-                print("{}\t{}\t{}".format(commit.hash, churn, to_display_name(tag)))
+                print("{}\t{}\t{}".format(commit.hash, churn, formatter.format(tag)))
