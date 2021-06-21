@@ -1,13 +1,14 @@
-import argparse
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import json
 import subprocess as sp
-from datetime import datetime
 from functools import reduce
 from itertools import chain
 from typing import Counter, FrozenSet, Iterator, List, Mapping, Tuple
 
-import gitparser
-import ir
+from gitchurn import gitparser, ir
 
 ENCODING = "UTF-8"
 
@@ -77,6 +78,7 @@ class CTagsDriver:
         cin = '{{"command":"generate-tags", "filename":"{}", "size":{}}}\n{}'.format(
             filename, len(text.encode(ENCODING)), text
         )
+        # We skip the first and last message because they are not tags.
         lines = proc.communicate(cin)[0].splitlines()[1:-1]
         return [json.loads(line) for line in lines]
 
@@ -117,39 +119,3 @@ class ChurnProvider:
         for tag in self._tag_provider.get_parent_tags(change.filename, hash):
             count[to_canon(tag)] = count_linenos(tag, change.dellines())
         return count
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="calculate change churn below the file-level"
-    )
-    parser.add_argument(
-        "--git-repo",
-        dest="git_repo",
-        default=".",
-        help="path to the git repository (default: current directory)",
-    )
-    parser.add_argument(
-        "--git-path",
-        dest="git_bin",
-        default="git",
-        help="path to git binary (default: git)",
-    )
-    parser.add_argument(
-        "--ctags-path",
-        dest="ctags_bin",
-        default="ctags",
-        help="path to the universal-ctags binary (default: ctags)",
-    )
-
-    args = parser.parse_args()
-    git_driver = GitDriver(git_bin=args.git_bin, git_repo=args.git_repo)
-    ctags_driver = CTagsDriver(ctags_bin=args.ctags_bin)
-    tag_provider = TagProvider(git_driver, ctags_driver)
-    churn_provider = ChurnProvider(tag_provider)
-
-    start = datetime.now()
-    for commit in gitparser.parse(git_driver.log()):
-        for tag, churn in churn_provider.get_churn(commit).items():
-            print("{}\t{}\t{}".format(commit.hash, churn, to_display_name(tag)))
-    print(datetime.now() - start)

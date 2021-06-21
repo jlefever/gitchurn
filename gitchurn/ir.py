@@ -1,3 +1,7 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import enum
 import itertools as it
 from typing import Iterator, List, NamedTuple
@@ -29,13 +33,13 @@ class Change(NamedTuple):
 
     def has_newlines(self) -> bool:
         return any(c.new_offset > 0 for c in self.chunks)
-    
+
     def has_dellines(self) -> bool:
         return any(c.del_offset > 0 for c in self.chunks)
 
     def newlines(self) -> Iterator[int]:
         return it.chain.from_iterable((c.newlines() for c in self.chunks))
-    
+
     def dellines(self) -> Iterator[int]:
         return it.chain.from_iterable((c.dellines() for c in self.chunks))
 
