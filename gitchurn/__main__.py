@@ -37,8 +37,12 @@ def main(argv: Optional[List[str]] = None):
     parser.add_argument(
         "--git-log-args",
         dest="git_log_args",
-        default="",
         help="any additional arguments to pass to git-log (optional)",
+    )
+    parser.add_argument(
+        "--max-changes",
+        dest="max_changes",
+        help="exclude commits that changed more than this number of files (optional)",
     )
 
     args = parser.parse_args(argv)
@@ -48,13 +52,10 @@ def main(argv: Optional[List[str]] = None):
     ctags_driver = gitchurn.CTagsDriver(ctags_bin=args.ctags_bin)
     tag_provider = gitchurn.TagProvider(git_driver, ctags_driver)
     churn_provider = gitchurn.ChurnProvider(tag_provider)
+    printer = gitchurn.ChurnPrinter(churn_provider, git_driver)
 
     start = datetime.now()
-    for commit in gitparser.parse(git_driver.log()):
-        for tag, churn in churn_provider.get_churn(commit).items():
-            print(
-                "{}\t{}\t{}".format(commit.hash, churn, gitchurn.to_display_name(tag))
-            )
+    printer.print(int(args.max_changes))
     print(datetime.now() - start)
     return 0
 

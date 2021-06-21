@@ -7,7 +7,7 @@ import shlex
 import subprocess as sp
 from functools import reduce
 from itertools import chain
-from typing import Counter, FrozenSet, Iterator, List, Mapping, Tuple
+from typing import Counter, FrozenSet, Iterator, List, Mapping, Optional, Tuple
 
 from gitchurn import gitparser, ir
 
@@ -121,3 +121,17 @@ class ChurnProvider:
         for tag in self._tag_provider.get_parent_tags(change.filename, hash):
             count[to_canon(tag)] = count_linenos(tag, change.dellines())
         return count
+
+
+class ChurnPrinter:
+    def __init__(self, churn_provider: ChurnProvider, git_driver: GitDriver):
+        self._churn = churn_provider
+        self._git = git_driver
+
+    def print(self, max_changes: Optional[int] = None):
+        for commit in gitparser.parse(self._git.log()):
+            # Exclude commits that changed too many files
+            if (max_changes is not None) and (len(commit.changes) > max_changes):
+                continue
+            for tag, churn in self._churn.get_churn(commit).items():
+                print("{}\t{}\t{}".format(commit.hash, churn, to_display_name(tag)))
