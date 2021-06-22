@@ -4,13 +4,12 @@
 
 import argparse
 import sys
-from datetime import datetime
 from typing import List, Optional
 
-from gitchurn import gitchurn, gitparser
+from gitchurn import gitchurn
 
 
-def main(argv: Optional[List[str]] = None):
+def main(argv: Optional[List[str]] = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
 
@@ -65,9 +64,8 @@ def main(argv: Optional[List[str]] = None):
     churn_provider = gitchurn.ChurnProvider(tag_provider)
     printer = gitchurn.ChurnPrinter(churn_provider, git_driver)
 
-    start = datetime.now()
-    printer.print(formatter_factory.create(args.tag_format), int(args.max_changes))
-    print(datetime.now() - start)
+    max_changes = int(args.max_changes) if args.max_changes else None
+    printer.print(formatter_factory.create(args.tag_format), max_changes)
     return 0
 
 
