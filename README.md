@@ -1,6 +1,6 @@
 # Git Churn
 
-The purpose of this tool is to calculate change churn below the file-level. Git can already calculate churn with `git log --numstate` which will print how many lines of text were added and removed in each file touched by a commit. This tool prints the same information for each *tag* touched by a commit. A tag is any item inside a source file such as a class, function, field, etc. We detect tags using [Universal CTags](https://github.com/universal-ctags/ctags). In effect, this tool is just some glue between `ctags` and `git`.
+The purpose of this tool is to calculate change churn below the file-level. Git can already calculate churn with `git log --numstat` which will print how many lines of text were added and removed in each file touched by a commit. This tool prints the same information for each *tag* touched by a commit. A tag is any item in a source file such as a class, function, field, etc. We detect tags using [Universal CTags](https://github.com/universal-ctags/ctags). In effect, this tool is just some glue between `ctags` and `git`.
 
 ## Install
 
@@ -23,6 +23,8 @@ a058e4559d0363ed956780e81f2e6f0d84d0ead3	2	<tag_3>
 ```
 
 The output is always three columns delimated by tabs. The first column is the commit hash. The second column is the churn (added plus deleted lines). The last column is the tag. By default, tags are printed in a human readable format but this can be changed with `--tag-format`. See `gitchurn --help` for further options.
+
+These churn calculations are fairly expensive and are not going to fluxuate, so it might be wise to immediately pipe the output to a file. You will also see significant performance gains by filtering down commits. See the next section for more details.
 
 ## Example
 
