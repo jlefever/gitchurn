@@ -41,7 +41,7 @@ The arguments passed to `--git-log-args` will be fowarded to [git-log](https://g
 Now we can limit this even further. Say we are only interested in Java code which is not tests.
 
 ```
-gitchurn -git-log-args "master -n 100 -- **/*.java :^**/src/test/**"
+gitchurn --git-log-args "master -n 100 -- **/*.java :^**/src/test/**"
 ```
 
 Everything after `--` is interpreted as path information by git-log. So `**/*.java` is a glob telling git to only select Java files. Similarly, `:^**/src/test/**` tells git to exclude tests. (The `:^` prefix causes git to invert the selection.)
@@ -49,7 +49,7 @@ Everything after `--` is interpreted as path information by git-log. So `**/*.ja
 Finally, if we want to ignore large commits (such as those caused by refactoring), we can set a maximum commit size.
 
 ```
-gitchurn -git-log-args "master -n 100 -- **/*.java :^**/src/test/**" --max-changes 30
+gitchurn --git-log-args "master -n 100 -- **/*.java :^**/src/test/**" --max-changes 30
 ```
 
 So any commits which have changed more than 30 non-test Java files will be excluded.
