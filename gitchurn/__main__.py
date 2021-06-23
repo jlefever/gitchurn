@@ -37,6 +37,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--git-log-args",
         dest="git_log_args",
+        default="",
         help="any additional arguments to pass to git-log (optional)",
     )
     parser.add_argument(
@@ -62,10 +63,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ctags_driver = gitchurn.CTagsDriver(ctags_bin=args.ctags_bin)
     tag_provider = gitchurn.TagProvider(git_driver, ctags_driver)
     churn_provider = gitchurn.ChurnProvider(tag_provider)
-    printer = gitchurn.ChurnPrinter(churn_provider, git_driver)
+    record_provider = gitchurn.LogRecordProvider(churn_provider, git_driver)
 
     max_changes = int(args.max_changes) if args.max_changes else None
-    printer.print(formatter_factory.create(args.tag_format), max_changes)
+    formatter = formatter_factory.create(args.tag_format)
+    for record in record_provider.fetch(formatter, max_changes):
+        print("{}\t{}\t{}".format(record.commit, record.churn, record.tag))
     return 0
 
 

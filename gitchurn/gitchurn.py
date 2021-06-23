@@ -8,7 +8,16 @@ import shlex
 import subprocess as sp
 from functools import reduce
 from itertools import chain
-from typing import Counter, FrozenSet, Iterator, List, Mapping, Optional, Tuple
+from typing import (
+    Counter,
+    FrozenSet,
+    Iterator,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Tuple,
+)
 
 from gitchurn import gitparser, ir
 
@@ -33,7 +42,9 @@ def count_linenos(tag: Tag, linenos: Iterator[int]) -> int:
 
 
 def to_canon(tag: Tag) -> CanonTag:
-    return frozenset((k, v) for k, v in tag.items() if k not in ["line", "end", "_type"])
+    return frozenset(
+        (k, v) for k, v in tag.items() if k not in ["line", "end", "_type"]
+    )
 
 
 def run(args: List[str]) -> str:
@@ -134,7 +145,7 @@ class JsonFormatter(TagFormatter):
 
 
 class TagFormatterFactory:
-    def __init__(self):
+    def __init__(self) -> None:
         self._kinds = ["human", "json"]
 
     def kinds(self) -> List[str]:
@@ -148,15 +159,23 @@ class TagFormatterFactory:
         return JsonFormatter()
 
 
-class ChurnPrinter:
+class LogRecord(NamedTuple):
+    commit: str
+    churn: int
+    tag: str
+
+
+class LogRecordProvider:
     def __init__(self, churn_provider: ChurnProvider, git_driver: GitDriver):
         self._churn = churn_provider
         self._git = git_driver
 
-    def print(self, formatter: TagFormatter, max_changes: Optional[int] = None) -> None:
+    def fetch(
+        self, formatter: TagFormatter, max_changes: Optional[int] = None
+    ) -> Iterator[LogRecord]:
         for commit in gitparser.parse(self._git.log()):
             # Exclude commits that changed too many files
             if (max_changes is not None) and (len(commit.changes) > max_changes):
                 continue
             for tag, churn in self._churn.get_churn(commit).items():
-                print("{}\t{}\t{}".format(commit.hash, churn, formatter.format(tag)))
+                yield LogRecord(commit.hash, churn, formatter.format(tag))
